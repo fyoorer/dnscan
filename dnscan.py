@@ -10,6 +10,8 @@ import re
 import sys
 import threading
 import time
+from netaddr import *
+import socket
 
 try:    # Ugly hack because Python3 decided to rename Queue to queue
     import Queue
@@ -35,6 +37,8 @@ except:
 class scanner(threading.Thread):
     def __init__(self, queue):
         global wildcard
+        global iprange
+        iprange = set()
         threading.Thread.__init__(self)
         self.queue = queue
 
@@ -49,15 +53,16 @@ class scanner(threading.Thread):
                     if wildcard:
                         if rdata.address == wildcard:
                             return
-                    if args.domain_first:
-                        print(domain + " - " + col.brown + rdata.address + col.end)
-                    else:
-                        print(rdata.address + " - " + col.brown + domain + col.end)
+                    print(rdata.address + " - " + col.brown + domain + col.end)
+
+                    #for scanning IP range - aditya
+
+                    c=(rdata.address).rfind(".")
+                    r=(rdata.address)[:c]+".0"
+                    iprange.add(r)
+
                     if outfile:
-                        if args.domain_first:
-                            print(domain + " - " + rdata.address, file=outfile)
-                        else:
-                            print(rdata.address + " - " + domain, file=outfile)
+                        print(rdata.address + " - " + domain, file=outfile)
                 if domain != target and args.recurse:    # Don't scan root domain twice
                     add_target(domain)  # Recursively scan subdomains
             except:
@@ -206,12 +211,11 @@ def get_args():
     parser.add_argument('-z', '--zonetransfer', action="store_true", default=False, help='Only perform zone transfers', dest='zonetransfer', required=False)
     parser.add_argument('-r', '--recursive', action="store_true", default=False, help="Recursively scan subdomains", dest='recurse', required=False)
     parser.add_argument('-o', '--output', help="Write output to a file", dest='output_filename', required=False)
-    parser.add_argument('-D', '--domain-first', action="store_true", default=False, help='Output domain first, rather than IP address', dest='domain_first', required=False)
     parser.add_argument('-v', '--verbose', action="store_true", default=False, help='Verbose mode', dest='verbose', required=False)
     args = parser.parse_args()
 
 def setup():
-    global target, wordlist, queue, resolver, recordtype, outfile
+    global target, wordlist, queue, resolver, recordtype, outfile,ipfile
     target = args.domain
     if not args.wordlist:   # Try to use default wordlist if non specified
         args.wordlist = os.path.join(os.path.dirname(os.path.realpath(__file__)), "subdomains.txt")
@@ -229,6 +233,15 @@ def setup():
     except IOError:
         out.fatal("Could not open output file: " + args.output_filename)
         sys.exit(1)
+    try:
+        ipfile = open("iprange.txt", "w")
+    except TypeError:
+        ipfile = None
+    except IOError:
+        out.fatal("Could not open output file: iprange.txt")
+        sys.exit(1)
+
+
 
     # Number of threads should be between 1 and 32
     if args.threads < 1:
@@ -244,6 +257,15 @@ def setup():
         recordtype = 'AAAA'
     else:
         recordtype = 'A'
+
+def ipRangeScan(ipaddr,cidr):
+    for ip in IPNetwork(ipaddr + "/" + cidr):
+        try:
+            hname = socket.gethostbyaddr(str(ip))
+            if hname[0].endswith(target):
+                print (str(ip)+" - "+hname[0])
+        except:
+            pass
 
 
 if __name__ == "__main__":
@@ -291,8 +313,9 @@ if __name__ == "__main__":
             t.join(1024)       # Timeout needed or threads ignore exceptions
     except KeyboardInterrupt:
         out.fatal("Caught KeyboardInterrupt, quitting...")
-        if outfile:
-            outfile.close()
         sys.exit(1)
-    if outfile:
-        outfile.close()
+
+    print("[+] Scanning nearby hosts")
+    #scan ip ranges for more domains
+    for item in iprange:
+        ipRangeScan(item,"24")
